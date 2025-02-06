@@ -1,6 +1,6 @@
 mod constants;
 mod fedilinker;
-pub use constants::{FEDILINK_SHORT_CODE_LENGTH, FEDILINK_BASE_URL, FEDILINK_REDIR_URL};
+pub use constants::{FEDILINK_BASE_URL, FEDILINK_REDIR_URL, FEDILINK_SHORT_CODE_LENGTH};
 
 pub use fedilinker::*;
 
@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Deserialize, Serialize)]
 struct IncomingURL {
     url: String,
+    platform: String, // lemmy, pixelfed, mastodon, etc etc.
 }
 
 #[derive(Deserialize, Serialize)]
@@ -62,7 +63,7 @@ pub async fn get_id(extract::Path(id): extract::Path<i32>) -> String {
 async fn handle_incoming_url(payload: Json<IncomingURL>) -> Json<OutgoingFedilnk> {
     println!("Recv'd url: {}", payload.url);
     // convert_call(payload.url)
-    let fedilink = create_fedilink(&payload.url);
+    let fedilink = create_fedilink(&payload.url, &payload.platform);
     // respond with fedilink
     let response = OutgoingFedilnk {
         original: payload.url.to_string(),
@@ -74,10 +75,13 @@ async fn handle_incoming_url(payload: Json<IncomingURL>) -> Json<OutgoingFedilnk
 /*
    Create a fedilink for a given URL and store in cloudflare workers kv
 */
-fn create_fedilink(original_url: &String) -> String {
+fn create_fedilink(original_url: &String, platform: &String) -> String {
     let mut fedilinker = Fedilinker::new();
 
-    fedilinker.create_fedilink_url(original_url.as_str()).unwrap().to_string()
+    fedilinker
+        .create_fedilink_url(original_url.as_str())
+        .unwrap()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -91,7 +95,10 @@ mod tests {
     fn test_fedilinker() {
         let mut fedilinker = Fedilinker::new();
         let original_url = "http://example.com/beans";
-        let fedilink_url =  fedilinker.create_fedilink_url(original_url).unwrap().to_string();
+        let fedilink_url = fedilinker
+            .create_fedilink_url(original_url)
+            .unwrap()
+            .to_string();
 
         // println!("orig: {}, fedi: {}", original_url, fedilink_url);
         // assert that we got a url out of the tretri
@@ -104,25 +111,37 @@ mod tests {
     }
 
     /*
-        Test that:
-        - we are getting unique fedilinks
-        - fedilinks are the appropriate length
-        - fedilinks are a fixed length
-     */
+       Test that:
+       - we are getting unique fedilinks
+       - fedilinks are the appropriate length
+       - fedilinks are a fixed length
+    */
     #[test]
     fn test_fedilinker_quality() {
         let mut fedilinker = Fedilinker::new();
         let original_url = "http://example.com/beans";
-        let fedilink_url_one = fedilinker.create_fedilink_url(original_url).unwrap().to_string();
-        let fedilinker_url_two = fedilinker.create_fedilink_url(original_url).unwrap().to_string();
+        let fedilink_url_one = fedilinker
+            .create_fedilink_url(original_url)
+            .unwrap()
+            .to_string();
+        let fedilinker_url_two = fedilinker
+            .create_fedilink_url(original_url)
+            .unwrap()
+            .to_string();
 
-        println!("orig: {} one {} two {}", original_url, fedilink_url_one, fedilinker_url_two);
+        println!(
+            "orig: {} one {} two {}",
+            original_url, fedilink_url_one, fedilinker_url_two
+        );
         // fedilinks should always be unique, regardless of the source url
         assert_ne!(fedilink_url_one, fedilinker_url_two);
         // fedilinks should have a defined and constant size, as defined in constants.rs
         // fedilinks are the baseurl/ redir_url/ short_code, but the redir_url doesn't contain the slash that's added by the
         // url crate, so count the length here.
-        let expected_len = FEDILINK_BASE_URL.len() + FEDILINK_REDIR_URL.len() + "/".len() + FEDILINK_SHORT_CODE_LENGTH;
+        let expected_len = FEDILINK_BASE_URL.len()
+            + FEDILINK_REDIR_URL.len()
+            + "/".len()
+            + FEDILINK_SHORT_CODE_LENGTH;
         assert_eq!(fedilink_url_one.len(), expected_len);
         // fedilinks should always be the same length
         assert_eq!(fedilink_url_one.len(), fedilinker_url_two.len());
