@@ -1,12 +1,12 @@
 pub use crate::constants::{
-    ALPHANUMERIC, FEDILINK_BASE_URL, FEDILINK_SHORT_CODE_LENGTH,
-    VALID_FEDILINK_PLATFORMS,
+    ALPHANUMERIC, FEDILINK_BASE_URL, FEDILINK_SHORT_CODE_LENGTH, VALID_FEDILINK_PLATFORMS,
 };
 
+//TODO: This is used for error handling, but we should just use simple_error everywhere
+use crate::BoxResult;
 use getrandom;
 use std::collections::{HashMap, HashSet};
 use url::{ParseError, Url};
-use worker::js_sys::{Array, Boolean};
 
 pub struct Fedilinker {
     url_map: HashMap<String, String>,
@@ -25,6 +25,28 @@ impl Fedilinker {
         }
     }
 
+    /*
+       Create a fedilink for a given URL and store in cloudflare workers kv
+    */
+    pub fn create_fedilink(
+        &mut self,
+        original_url: &String,
+        platform: &String,
+    ) -> BoxResult<String> {
+        match self.validate_platform(platform) {
+            Ok(()) => {
+                println!("Successfully validated the fedilinker!");
+                Ok(self
+                    .create_fedilink_url(original_url.as_str(), platform.as_str())
+                    .unwrap()
+                    .to_string())
+            }
+            Err(_) => {
+                println!("Failed to validate the fedilinker!");
+                bail!("invalid platform")
+            }
+        }
+    }
 
     /*
        Generate a fedilink shortcode, which is an 8 character short code.
@@ -48,7 +70,11 @@ impl Fedilinker {
     /*
        Combine the short_code with the fedilinks.net to create the url.
     */
-    pub fn create_fedilink_url(&mut self, original_url: &str, platform: &str) -> Result<Url, ParseError> {
+    pub fn create_fedilink_url(
+        &mut self,
+        original_url: &str,
+        platform: &str,
+    ) -> Result<Url, ParseError> {
         let short_code = self.generate_fedilink_shortcode(platform);
         self.url_map
             .insert(short_code.clone(), original_url.to_string());
@@ -73,12 +99,12 @@ impl Fedilinker {
             .get(short_code.path().strip_prefix('/').unwrap())
     }
 
-    pub fn validate_subdomain(&self, platform: &str) -> Result<(), bool> {
+    pub fn validate_platform(&self, platform: &str) -> Result<(), String> {
         if self.valid_platforms.contains(platform) {
             Ok(())
         } else {
-            println!("The platform provided [{}] is invalid.", platform);
-            Err(false)
+            // println!("The platform provided [{}] is invalid.", platform);
+            Err(format!("failed to validate platform [{}]", platform).to_string())
         }
     }
 }
