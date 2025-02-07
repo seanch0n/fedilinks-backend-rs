@@ -1,6 +1,6 @@
 mod constants;
 mod fedilinker;
-pub use constants::{FEDILINK_BASE_URL, FEDILINK_REDIR_URL, FEDILINK_SHORT_CODE_LENGTH};
+pub use constants::{FEDILINK_BASE_URL, FEDILINK_SHORT_CODE_LENGTH};
 
 pub use fedilinker::*;
 
@@ -79,7 +79,7 @@ fn create_fedilink(original_url: &String, platform: &String) -> String {
     let mut fedilinker = Fedilinker::new();
 
     fedilinker
-        .create_fedilink_url(original_url.as_str())
+        .create_fedilink_url(original_url.as_str(), platform.as_str())
         .unwrap()
         .to_string()
 }
@@ -95,8 +95,9 @@ mod tests {
     fn test_fedilinker() {
         let mut fedilinker = Fedilinker::new();
         let original_url = "http://example.com/beans";
+        let platform = "lemmy";
         let fedilink_url = fedilinker
-            .create_fedilink_url(original_url)
+            .create_fedilink_url(original_url, platform)
             .unwrap()
             .to_string();
 
@@ -120,12 +121,13 @@ mod tests {
     fn test_fedilinker_quality() {
         let mut fedilinker = Fedilinker::new();
         let original_url = "http://example.com/beans";
+        let platform = "lemmy";
         let fedilink_url_one = fedilinker
-            .create_fedilink_url(original_url)
+            .create_fedilink_url(original_url, platform)
             .unwrap()
             .to_string();
         let fedilinker_url_two = fedilinker
-            .create_fedilink_url(original_url)
+            .create_fedilink_url(original_url, platform)
             .unwrap()
             .to_string();
 
@@ -139,7 +141,7 @@ mod tests {
         // fedilinks are the baseurl/ redir_url/ short_code, but the redir_url doesn't contain the slash that's added by the
         // url crate, so count the length here.
         let expected_len = FEDILINK_BASE_URL.len()
-            + FEDILINK_REDIR_URL.len()
+            + platform.len()
             + "/".len()
             + FEDILINK_SHORT_CODE_LENGTH;
         assert_eq!(fedilink_url_one.len(), expected_len);

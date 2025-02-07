@@ -6,10 +6,8 @@ pub const ALPHANUMERIC: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrst
 pub const FEDILINK_BASE_URL: &str = "http://fedilinks.net/";
 // This is what goes after the FEDILINK_BASE_URL and before the short_code, so we get urls like:
 // http://fedilinks.net/re/asdfasdf
-pub const FEDILINK_REDIR_URL: &str = "re";
-
-pub const VALID_FEDILINK_SUBDOMAINS: [String; 3] = [
-    "lemmy".to_string(),
-    "pixelfed".to_string(),
-    "mastodon".to_string(),
+pub const VALID_FEDILINK_PLATFORMS: [&str; 3] = [
+    "lemmy",
+    "pixelfed",
+    "mastodon",
 ];

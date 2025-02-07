@@ -1,27 +1,27 @@
 pub use crate::constants::{
-    ALPHANUMERIC, FEDILINK_BASE_URL, FEDILINK_REDIR_URL, FEDILINK_SHORT_CODE_LENGTH,
-    VALID_FEDILINK_SUBDOMAINS,
+    ALPHANUMERIC, FEDILINK_BASE_URL, FEDILINK_SHORT_CODE_LENGTH,
+    VALID_FEDILINK_PLATFORMS,
 };
 
 use getrandom;
 use std::collections::{HashMap, HashSet};
 use url::{ParseError, Url};
-use worker::js_sys::Array;
+use worker::js_sys::{Array, Boolean};
 
 pub struct Fedilinker {
     url_map: HashMap<String, String>,
-    valid_subdomains: HashSet<String>,
+    valid_platforms: HashSet<&'static str>,
 }
 impl Fedilinker {
     pub fn new() -> Self {
-        let valid_subdomains_set = VALID_FEDILINK_SUBDOMAINS
+        let valid_platforms_set = VALID_FEDILINK_PLATFORMS
             .iter()
             .cloned()
             .collect::<HashSet<_>>();
 
         Self {
             url_map: HashMap::new(),
-            valid_subdomains: valid_subdomains_set,
+            valid_platforms: valid_platforms_set,
         }
     }
 
@@ -31,7 +31,7 @@ impl Fedilinker {
        We have to use the getrandom crate instead of rand because it supports
        wasm-js which we need for cloudflare workers
     */
-    fn generate_fedilink_shortcode(&self) -> String {
+    fn generate_fedilink_shortcode(&self, platform: &str) -> String {
         let mut buf = [0; FEDILINK_SHORT_CODE_LENGTH];
         getrandom::fill(&mut buf).expect("Failed to get random bytes");
 
@@ -41,25 +41,21 @@ impl Fedilinker {
             .map(|&b| ALPHANUMERIC[(b as usize) % ALPHANUMERIC.len()] as char)
             .collect();
 
-        println!("Shortcode: {}", short_code);
-        format!("{}/{}", FEDILINK_REDIR_URL, short_code)
-        // short_code
+        println!("Platform: [{}] Shortcode:[{}]", platform, short_code);
+        format!("{}/{}", platform, short_code)
     }
 
     /*
        Combine the short_code with the fedilinks.net to create the url.
     */
     pub fn create_fedilink_url(&mut self, original_url: &str, platform: &str) -> Result<Url, ParseError> {
-        let short_code = self.generate_fedilink_shortcode();
+        let short_code = self.generate_fedilink_shortcode(platform);
         self.url_map
             .insert(short_code.clone(), original_url.to_string());
 
-        //TODO: we need to add subdomain/platform to the fedilink. We are parsing it from
-        //TODO: the incoming request, but we need to add it to the fedilink, and then probably
-        //TODO: change how we parse the fedilinks on retrival, and add test cases for it too.
-        let mut url = Url::parse(FEDILINK_BASE_URL)?;
-        url.set_path(&short_code);
-        Ok(url)
+        let base_url = Url::parse(FEDILINK_BASE_URL)?;
+        let full_url = base_url.join(&short_code)?;
+        Ok(full_url)
     }
 
     /*
@@ -77,11 +73,12 @@ impl Fedilinker {
             .get(short_code.path().strip_prefix('/').unwrap())
     }
 
-    pub fn validate_subdomain(&self, subdomain: &str) -> Result<(), String> {
-        if self.valid_subdomains.contains(subdomain) {
+    pub fn validate_subdomain(&self, platform: &str) -> Result<(), bool> {
+        if self.valid_platforms.contains(platform) {
             Ok(())
         } else {
-            Err(format!("Invalid subdomain: {}", subdomain))
+            println!("The platform provided [{}] is invalid.", platform);
+            Err(false)
         }
     }
 }
