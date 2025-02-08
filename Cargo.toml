@@ -29,5 +29,9 @@ serde = { version = "1.0.196", features = ["derive"]}
 # environment variable loading
 dotenvy = "0.15.7"
 #rand= { version = "0.9.0", features = ["std_rng, wasm_js"]}
-getrandom = { version = "0.3.1", features = ["wasm_js"]}
+rand = "0.8.5"
+
+# this is REQUIRED for building on osx for some reason? the 0.3.1 with wasm_js
+# flags like documented do not work here, even though they work on windows :(:
+getrandom = { version = "0.2", features = ["js"]}
 url = "2.5.4"

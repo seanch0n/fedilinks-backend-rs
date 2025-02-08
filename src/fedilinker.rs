@@ -20,7 +20,8 @@ impl Fedilinker {
     */
     fn generate_fedilink_shortcode(&self) -> String {
         let mut buf = [0; FEDILINK_SHORT_CODE_LENGTH];
-        getrandom::fill(&mut buf).expect("Failed to get random bytes");
+        getrandom::getrandom(&mut buf).expect("Failed to get random bytes");
+        // getrandom::fill(&mut buf).expect("Failed to get random bytes");
 
         // Map random bytes to characters in the ALPHABET/upper/lower/numbers
         let short_code: String = buf
