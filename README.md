@@ -16,3 +16,14 @@ Runs on top of cloudflare workers
 - [ ] redirect when visited
 - [ ] hook up cloudflare workers kv stuff
 - [ ] optionally attribute urls to users so they can see their history/share their profile of links
+
+
+
+
+# SCRATCH NOTES TODO
+
+- [x] implement tests for everything
+- [ ] look into pulling strings and stuff from env
+- [ ] build out consts
+- [ ] better errors?
+- [ ] it would be really nice to have the psot_async in a handler function. it's gross.
