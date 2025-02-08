@@ -1,23 +1,7 @@
 mod constants;
 mod fedilinker;
-pub use constants::{FEDILINK_BASE_URL, FEDILINK_SHORT_CODE_LENGTH};
-
+pub use constants::{FEDILINK_BASE_URL, FEDILINK_SHORT_CODE_LENGTH, KV_STORE_NAME, KV_STORE_EXPIR_SECONDS};
 pub use fedilinker::*;
-
-// worker added crates
-use tower_service::Service;
-use worker::*;
-
-// user added crates
-use axum::*;
-use axum::{
-    extract,
-    routing::{get, post},
-    Router,
-    http::StatusCode,
-    response::{IntoResponse, Json as J},
-};
-use serde::{Deserialize, Serialize};
 
 #[macro_use]
 extern crate simple_error;
@@ -27,10 +11,13 @@ use std::result::Result as R;
 
 // used for error handling with simple_error
 type BoxResult<T> = R<T, Box<dyn E>>;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use worker::*;
 
 #[derive(Deserialize, Serialize)]
 struct IncomingURL {
-    url: String, // the url they want to link with fedilink
+    url: String,      // the url they want to link with fedilink
     platform: String, // lemmy, pixelfed, mastodon. Defined in constants.rs
 }
 
@@ -40,113 +27,134 @@ struct OutgoingFedilink {
     fedilink: String,
 }
 
-fn router() -> Router {
-    Router::new()
-        .route("/", get(root))
-        .route("/{id}", get(get_id))
-        .route("/make-fedilink", post(handle_incoming_url))
-}
-
 #[event(fetch)]
-async fn fetch(
-    req: HttpRequest,
-    _env: Env,
-    _ctx: Context,
-) -> Result<axum::http::Response<axum::body::Body>> {
-    console_error_panic_hook::set_once();
-    Ok(router().call(req).await?)
-}
+async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
+    console_log!("in fetch");
+    let router = Router::new();
+    // We need to wrap this in arc so we can use it in the thread of router. This is used
+    // to call into the Fedilinker impl and build our links.
+    let fedilinker = Arc::new(Fedilinker::new());
 
-pub async fn root() -> &'static str {
-    "Hello Axum!"
-}
+    // They make a post request to /make-fedilink with some JSON data (IncomingUrl struct ref)
+    router
+        .post_async("/make-fedilink", {
+            // we have to clone this within the context of the router, but before we perform
+            // the move or rust fliiiiiiips out
+            let fedilinker = Arc::clone(&fedilinker);
+            move |mut req, ctx| {
+                // and now that we have moved, we have to clone from the moved clone. This is gross.
+                let fedilinker = Arc::clone(&fedilinker);
+                async move {
+                    // parse the incoming request's json to get the url they want to make a fedilink for
+                    let incoming = match req.json::<IncomingURL>().await {
+                        Ok(data) => data,
+                        Err(_) => return Response::error("Failed to parse JSON", 400),
+                    };
 
-// testing
-pub async fn get_id(extract::Path(id): extract::Path<i32>) -> String {
-    let msg = format!("Hello {}!", id);
-    msg
-}
+                    // actually create the fedilink. This however does not store it in the storage layer,
+                    // that is on us to orchestrate, because I'm not going to try and pass more thread
+                    // stuff around
+                    let result = fedilinker.create_fedilink(&incoming.platform);
 
-/*
-   Get an incoming URL that needs to be converted to a fedilink and respond
-   with the newly minted fedilink
-*/
-async fn handle_incoming_url(payload: J<IncomingURL>) -> impl IntoResponse {
-    println!("Recv'd url: {}", payload.url);
-    let mut fedilinker = Fedilinker::new();
-    let result = fedilinker.create_fedilink(&payload.url, &payload.platform);
+                    // check the result, if it's good then we store in workers kv. Otherwise we throw an error back
+                    match result {
+                        Ok(fedilink) => {
+                            // store url: fedilink into the kv store
+                            match ctx
+                                .kv(KV_STORE_NAME)?
+                                .put(&fedilink.to_string(), &incoming.url)
+                                .unwrap()
+                                .expiration_ttl(KV_STORE_EXPIR_SECONDS)
+                                .execute()
+                                .await
+                            {
+                                Ok(_) => console_log!(
+                                    "Saved it! {} == {}",
+                                    &fedilink.to_string(),
+                                    &incoming.url
+                                ),
+                                Err(_) => console_log!("Failed to save fedilink"),
+                            }
 
-    // Success response is the OutgoingFedilink struct filled out and a 200 OK
-    // Failure is the OutgoingFedilink with the original_url, an error message in the place of
-    // the fedilink, and a 400 BAD_REQUEST response
-    let (code, response) = match result {
-        Ok(fedilink) => {
-            let response = OutgoingFedilink {
-                original: payload.url.to_string(),
-                fedilink: fedilink.to_string(),
-            };
-            (StatusCode::OK, response)
-        }
-        Err(error_msg) => {
-            let response = OutgoingFedilink {
-                original: payload.url.to_string(),
-                fedilink: error_msg.to_string(),
-            };
-            (StatusCode::BAD_REQUEST, response)
-        }
-    };
-
-    (code, Json(response)).into_response()
+                            let original_url = ctx
+                                .kv(KV_STORE_NAME)?
+                                .get(&fedilink.to_string())
+                                .text()
+                                .await?;
+                            console_log!("we have original?: {}", &original_url.unwrap());
+                            // respond with the link
+                            let resp = OutgoingFedilink {
+                                original: incoming.url,
+                                fedilink: fedilink.to_string(),
+                            };
+                            Ok(Response::from_json(&resp)?.with_status(200))
+                        }
+                        Err(error_msg) => {
+                            console_log!("failed storage_ret match: {}", error_msg);
+                            let resp = OutgoingFedilink {
+                                original: incoming.url,
+                                fedilink: error_msg.to_string(),
+                            };
+                            Ok(Response::from_json(&resp)?.with_status(400))
+                        }
+                    }
+                }
+            }
+        })
+        .get_async("/:platform/:short_code", |_req, ctx| async move {
+            let platform = ctx.param("platform");
+            let short_code = ctx.param("short_code");
+            console_log!(
+                "platform: [{}], short_code: [{}]",
+                platform.unwrap(),
+                short_code.unwrap()
+            );
+            let original_url = ctx
+                .kv(KV_STORE_NAME)?
+                .get(&format!(
+                    "http://fedilinks.net/{}/{}",
+                    platform.unwrap(),
+                    short_code.unwrap()
+                ))
+                .text()
+                .await?;
+            match original_url {
+                Some(url) => {
+                    console_log!("orig was got as: {}", url);
+                    //TODO: If this redirect fails (the page doesn't exist), we throw an ugly 500 error
+                    // Response::redirect(url.parse().unwrap())
+                    match Response::redirect(url.parse().unwrap()) {
+                        Ok(redir) => {
+                            console_log!("Redirecting...");
+                            Ok(redir)
+                        }
+                        Err(e) => {
+                            console_log!("Failed to redirect: {}", e);
+                            Response::error(format!("Redirect failed for reason: {}", e), 400)
+                        }
+                    }
+                }
+                None => Response::error("Failed to find url. Maybe it expired?", 404),
+            }
+        })
+        .run(req, env)
+        .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::{Fedilinker, FEDILINK_BASE_URL, FEDILINK_SHORT_CODE_LENGTH};
 
-    /*
-       Test that the fedilinker is properly mapping URLs back to their original
-    */
-    #[test]
-    fn test_retri_url_from_fedilink_returns_some() {
-        let mut fedilinker = Fedilinker::new();
-        let original_url = "http://example.com/beans";
-        let platform = "lemmy";
-        let fedilink_url = fedilinker
-            .create_fedilink_url(original_url, platform)
-            .unwrap()
-            .to_string();
-
-        // assert that we got an url out of the tretri
-        assert!(fedilinker.retri_url_from_fedilink(&fedilink_url).is_some());
-    }
-    #[test]
-    fn test_retri_url_from_fedilink_returns_original() {
-        let mut fedilinker = Fedilinker::new();
-        let original_url = "http://example.com/beans";
-        let platform = "lemmy";
-        let fedilink_url = fedilinker
-            .create_fedilink_url(original_url, platform)
-            .unwrap()
-            .to_string();
-
-        // assert that the original_url and what we got out of retri match
-        assert_eq!(
-            fedilinker.retri_url_from_fedilink(&fedilink_url).unwrap(),
-            original_url
-        );
-    }
-
     #[test]
     fn test_fedilinker_returns_unique_fedilinks() {
-        let mut fedilinker = Fedilinker::new();
-        let original_url = "http://example.com/beans";
+        let fedilinker = Fedilinker::new();
         let platform = "lemmy";
         let fedilink_url_one = fedilinker
-            .create_fedilink_url(original_url, platform)
+            .create_fedilink_url(platform)
             .unwrap()
             .to_string();
         let fedilinker_url_two = fedilinker
-            .create_fedilink_url(original_url, platform)
+            .create_fedilink_url(platform)
             .unwrap()
             .to_string();
 
@@ -155,11 +163,10 @@ mod tests {
     }
     #[test]
     fn test_fedilinker_expected_length() {
-        let mut fedilinker = Fedilinker::new();
-        let original_url = "http://example.com/beans";
+        let fedilinker = Fedilinker::new();
         let platform = "lemmy";
         let fedilink_url_one = fedilinker
-            .create_fedilink_url(original_url, platform)
+            .create_fedilink_url(platform)
             .unwrap()
             .to_string();
 
@@ -179,15 +186,14 @@ mod tests {
     */
     #[test]
     fn test_fedilinker_two_unique_urls_are_same_length() {
-        let mut fedilinker = Fedilinker::new();
-        let original_url = "http://example.com/beans";
+        let fedilinker = Fedilinker::new();
         let platform = "lemmy";
         let fedilink_url_one = fedilinker
-            .create_fedilink_url(original_url, platform)
+            .create_fedilink_url(platform)
             .unwrap()
             .to_string();
         let fedilinker_url_two = fedilinker
-            .create_fedilink_url(original_url, platform)
+            .create_fedilink_url(platform)
             .unwrap()
             .to_string();
 
@@ -213,11 +219,9 @@ mod tests {
 
     #[test]
     fn test_create_fedilink_with_invalid_platform_returns_error() {
-        let mut fedilinker = Fedilinker::new();
-        let original_url = "http://example.com/beans";
+        let fedilinker = Fedilinker::new();
         let platform = "aninvalidplatformchoice";
-        let fedilink_url_one =
-            fedilinker.create_fedilink(&original_url.to_string(), &platform.to_string());
+        let fedilink_url_one = fedilinker.create_fedilink(&platform.to_string());
 
         //TODO: check the error message is what we expect. Store in constants.
         assert!(fedilink_url_one.is_err());
@@ -225,11 +229,9 @@ mod tests {
 
     #[test]
     fn test_create_fedilink_with_valid_platform_returns_ok() {
-        let mut fedilinker = Fedilinker::new();
-        let original_url = "http://example.com/beans";
+        let fedilinker = Fedilinker::new();
         let platform = "lemmy";
-        let fedilink_url_one =
-            fedilinker.create_fedilink(&original_url.to_string(), &platform.to_string());
+        let fedilink_url_one = fedilinker.create_fedilink(&platform.to_string());
 
         assert!(fedilink_url_one.is_ok());
     }
@@ -239,10 +241,9 @@ mod tests {
     }
     #[test]
     fn test_create_fedilink_with_valid_platform_returns_string() {
-        let mut fedilinker = Fedilinker::new();
-        let original_url = "http://example.com/beans";
+        let fedilinker = Fedilinker::new();
         let platform = "lemmy";
-        let fedilink = fedilinker.create_fedilink(&original_url.to_string(), &platform.to_string());
+        let fedilink = fedilinker.create_fedilink(&platform.to_string());
 
         assert_eq!(type_of(&fedilink.unwrap()), "alloc::string::String");
     }

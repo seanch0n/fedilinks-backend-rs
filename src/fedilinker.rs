@@ -5,11 +5,9 @@ pub use crate::constants::{
 //TODO: This is used for error handling, but we should just use simple_error everywhere
 use crate::BoxResult;
 use getrandom;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use url::{ParseError, Url};
-
 pub struct Fedilinker {
-    url_map: HashMap<String, String>,
     valid_platforms: HashSet<&'static str>,
 }
 impl Fedilinker {
@@ -20,7 +18,6 @@ impl Fedilinker {
             .collect::<HashSet<_>>();
 
         Self {
-            url_map: HashMap::new(),
             valid_platforms: valid_platforms_set,
         }
     }
@@ -28,16 +25,12 @@ impl Fedilinker {
     /*
        Create a fedilink for a given URL and store in cloudflare workers kv
     */
-    pub fn create_fedilink(
-        &mut self,
-        original_url: &String,
-        platform: &String,
-    ) -> BoxResult<String> {
+    pub fn create_fedilink(&self, platform: &String) -> BoxResult<String> {
         match self.validate_platform(platform) {
             Ok(()) => {
                 println!("Successfully validated the fedilinker!");
                 Ok(self
-                    .create_fedilink_url(original_url.as_str(), platform.as_str())
+                    .create_fedilink_url(platform.as_str())
                     .unwrap()
                     .to_string())
             }
@@ -66,44 +59,21 @@ impl Fedilinker {
         println!("Platform: [{}] Shortcode:[{}]", platform, short_code);
         format!("{}/{}", platform, short_code)
     }
-
     /*
        Combine the short_code with the fedilinks.net to create the url.
     */
-    pub fn create_fedilink_url(
-        &mut self,
-        original_url: &str,
-        platform: &str,
-    ) -> Result<Url, ParseError> {
+    pub fn create_fedilink_url(&self, platform: &str) -> Result<Url, ParseError> {
         let short_code = self.generate_fedilink_shortcode(platform);
-        self.url_map
-            .insert(short_code.clone(), original_url.to_string());
 
         let base_url = Url::parse(FEDILINK_BASE_URL)?;
         let full_url = base_url.join(&short_code)?;
         Ok(full_url)
     }
 
-    /*
-       Get the url that maps to the passed in fedilink
-    */
-    pub fn retri_url_from_fedilink(&mut self, fedilink_url: &str) -> Option<&String> {
-        let short_code = Url::parse(fedilink_url).unwrap();
-        println!("the map is: {:?}", self.url_map);
-        println!(
-            "looking for key: uh {} blop {}",
-            short_code,
-            short_code.path().strip_prefix('/').unwrap()
-        );
-        self.url_map
-            .get(short_code.path().strip_prefix('/').unwrap())
-    }
-
     pub fn validate_platform(&self, platform: &str) -> Result<(), String> {
         if self.valid_platforms.contains(platform) {
             Ok(())
         } else {
-            // println!("The platform provided [{}] is invalid.", platform);
             Err(format!("failed to validate platform [{}]", platform).to_string())
         }
     }

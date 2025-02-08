@@ -4,3 +4,13 @@ compatibility_date = "2025-02-06"
 
 [build]
 command = "cargo install -q worker-build && worker-build --release"
+
+#[[kv_namespaces]]
+#binding = "fedilinks"
+#id = "6a5d8df6fdd849aeabe940ad97c9f5b6"
+
+[[kv_namespaces]]
+binding = "cities"
+id = "bc61c64cc1ed47ec868b8abe683ee918"
+#binding = "LINKSTORAGE"
+#id = "431875f38903491b90151d53d4c86aad"
