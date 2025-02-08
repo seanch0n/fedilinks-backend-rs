@@ -3,9 +3,9 @@ pub use crate::constants::{
 };
 
 //TODO: This is used for error handling, but we should just use simple_error everywhere
-use crate::{BoxResult};
+use crate::BoxResult;
 use getrandom;
-use std::collections:: HashSet;
+use std::collections::HashSet;
 use url::{ParseError, Url};
 pub struct Fedilinker {
     valid_platforms: HashSet<&'static str>,
@@ -25,10 +25,7 @@ impl Fedilinker {
     /*
        Create a fedilink for a given URL and store in cloudflare workers kv
     */
-    pub fn create_fedilink(
-        &self,
-        platform: &String,
-    ) -> BoxResult<String> {
+    pub fn create_fedilink(&self, platform: &String) -> BoxResult<String> {
         match self.validate_platform(platform) {
             Ok(()) => {
                 println!("Successfully validated the fedilinker!");
@@ -65,10 +62,7 @@ impl Fedilinker {
     /*
        Combine the short_code with the fedilinks.net to create the url.
     */
-    pub fn create_fedilink_url(
-        &self,
-        platform: &str,
-    ) -> Result<Url, ParseError> {
+    pub fn create_fedilink_url(&self, platform: &str) -> Result<Url, ParseError> {
         let short_code = self.generate_fedilink_shortcode(platform);
 
         let base_url = Url::parse(FEDILINK_BASE_URL)?;
